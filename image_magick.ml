@@ -1,3 +1,6 @@
+(* Graphic Library *)
+#load "graphics.cma";;
+
 (*
   auteur : FIL
   date   : janvier 2010
