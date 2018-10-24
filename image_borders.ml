@@ -335,3 +335,60 @@ let image_to_kdt img =
 	let thin_img = thinning bin_img one_thining_guohall in
  	let pts_img = getPoints thin_img in
 	(pts_img,(KDTrees.constructKDT pts_img));;
+
+(* Transform points to lines *)
+let pointsToLines (pointList,pointTree) neighborhoodSize =
+	(* Transform an array to a set *)
+	let set_of_array arr = S.of_list (Array.to_list arr) in
+	(* Neiborhood of any tree point *)
+	let nf point = KDTrees.knns pointTree point neighborhoodSize KDTrees.int_tools 2 in
+	(* Various initializers *)
+	let num = Array.length pointList in
+	let pointSet = ref (set_of_array pointList) in
+	let count = ref 0 in
+	(* Algorithm variables *)
+	let current_point = ref [||] in
+	let current_neighborhood = ref [||] in
+	let current_segment = ref [] in
+	let segment_bag = ref [] in
+	(* Updaters to global variables *)
+	let add_to_segment point = (current_segment := point::!current_segment) in
+	let add_to_bag () =
+		(segment_bag := (Array.of_list !current_segment)::!segment_bag;
+		current_segment := []) in
+	let update_neighborhood () =
+		let ret = ref [] in
+		(* Get the neighbors *)
+		let neigh = nf !current_point in
+		for i = 0 to (neighborhoodSize-1) do
+			let (_,cur) = neigh.(i) in
+			if (S.mem cur !pointSet) then ret := cur::!ret;
+		done;(current_neighborhood :=
+					(Array.of_list (List.rev !ret))); in
+	let update_current_point point =
+		current_point := point in
+	let remove_from_points point =
+		pointSet := S.remove point !pointSet in
+	(* Main routine *)
+	let routine point =
+		update_current_point point;
+		add_to_segment !current_point;
+		update_neighborhood ();
+		remove_from_points !current_point;
+		count := !count + 1 in
+	(* Initialisation *)
+	routine (S.choose !pointSet);
+	(* Cover all the points *)
+	while (!count < num) do
+		(* Build the current segment *)
+		while ((Array.length !current_neighborhood) > 0) do
+			(* Add closest neightbor to the segment *)
+			add_to_segment !current_neighborhood.(0);
+			(* Update the variables *)
+			routine !current_neighborhood.(0);
+		done;
+		(* Add the built segment to the bag *)
+		add_to_bag ();
+		(* Re-initialise *)
+		if not (S.is_empty !pointSet) then routine (S.choose !pointSet);
+	done;(Array.of_list !segment_bag);;
