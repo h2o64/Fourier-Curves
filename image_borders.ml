@@ -3,6 +3,9 @@ open Image_magick;;
 (* Graphic Library *)
 #load "graphics.cma";;
 
+(* Set structure *)
+module S = Set.Make(struct type t = (int array) let compare = compare end);;
+
 let edge1_kernel = [|
 	[|1.;0.;-1.|];
 	[|0.;0.;0.|];
@@ -52,11 +55,21 @@ let matrixApply f matrix =
 (* Apply function on matrix *)
 let matrixApply_d f a b =
 	let (h,w) = getHW a in
-	if not ((h,w) =  getHW b) then failwith "applyFunctMatrix_d: Not same size";
+	if not ((h,w) =  getHW b) then failwith "matrixApply_d: Not same size";
 	let ret = Array.make_matrix h w (f a.(0).(0) b.(0).(0)) in
 	for i = 0 to (h-1) do
 		for j = 0 to (w-1) do
 			ret.(i).(j) <- f a.(i).(j) b.(i).(j);
+		done;
+	done;ret;;
+
+(* Apply function on matrix *)
+let matrixApply f m =
+	let (h,w) = getHW m in
+	let ret = Array.make_matrix h w (f m.(0).(0)) in
+	for i = 0 to (h-1) do
+		for j = 0 to (w-1) do
+			ret.(i).(j) <- f m.(i).(j);
 		done;
 	done;ret;;
 
@@ -191,3 +204,134 @@ let sobel_magn m =
 	let y_cv = convolve_matrix sobel_hY m in
 	let f x y = x**2. +. y**2. in
 	matrixApply_d f x_cv y_cv;;
+
+(* Binarize the image *)
+let binarize m threshold =
+	let (h,w) = getHW m in
+	let ret = Array.make_matrix h w 0 in
+	for i = 0 to (h-1) do
+		for j = 0 to (w-1) do
+			if (m.(i).(j) > threshold) then ret.(i).(j) <- 1;
+		done;
+	done;ret;;
+
+(* Image difference *)
+(* A &= ~B in CCP *)
+let img_mvt a b =
+	let (h,w) = getHW a in
+	for i = 0 to (h-1) do
+		for j = 0 to (w-1) do
+			a.(i).(j) <- ((land) a.(i).(j) (lnot b.(i).(j)));
+		done;
+	done;;
+
+(* Are there zeros ? *)
+let rec areThereNonZeros_aux m i b =
+	if i < 0 then false
+	else if (b = true) then true
+	else (areThereNonZeros_aux m (i-1) (Array.mem 1 m.(i)));;
+let areThereNonZeros m = areThereNonZeros_aux m ((Array.length m)-1) false;;
+
+(* Get abs difference between two matrix *)
+let absDiff a b =
+	let f a b = abs (b-a) in
+	matrixApply_d f a b;;
+
+(* Guo-Hall thinning algorithm - 1987 *)
+(* Get 8-neighborhood bool array *)
+let p matrix i j num =
+	if num = 9 then matrix.(i-1).(j-1)
+	else if num = 8 then matrix.(i).(j-1)
+	else if num = 7 then matrix.(i+1).(j-1)
+	else if num = 6 then matrix.(i+1).(j)
+	else if num = 5 then matrix.(i+1).(j+1)
+	else if num = 4 then matrix.(i).(j+1)
+	else if num = 3 then matrix.(i-1).(j+1)
+	else if num = 2 then matrix.(i-1).(j)
+	else matrix.(i).(j) (* Fallback *) ;;
+
+(* One thining iteration *)
+let one_thining_guohall m iter =
+	(* Prepare matrix *)
+	let (h,w) = getHW m in
+	let marker = Array.make_matrix h w 0 in
+	let m_bak = Array.copy m in
+	let deleting = ref false in
+	(* Actual loop *)
+	for i = 2 to (h-2) do
+		for j = 2 to (w-2) do
+			(* Get values *)
+			let p_cur num = p m i j num in
+			let p2 = (p_cur 2) in
+			let p3 = (p_cur 3) in
+			let p4 = (p_cur 4) in
+			let p5 = (p_cur 5) in
+			let p6 = (p_cur 6) in
+			let p7 = (p_cur 7) in
+			let p8 = (p_cur 8) in
+			let p9 = (p_cur 9) in
+			(* Conditions *)
+			let c  = ((land) (lnot p2) ((lor) p3 p4)) + ((land) (lnot p4) ((lor) p5 p6)) +
+							 ((land) (lnot p6) ((lor) p7 p8)) + ((land) (lnot p8) ((lor) p9 p2)) in
+			let n1 = ((lor) p9 p2) + ((lor) p3 p4) + ((lor) p5 p6) + ((lor) p7 p8) in
+			let n2 = ((lor) p2 p3) + ((lor) p4 p5) + ((lor) p6 p7) + ((lor) p8 p9) in
+			let n  = if n1 < n2 then n1 else n2 in
+			let m_c  = if (iter = 0) then
+					((land) ((lor) ((lor) p6 p7) (lnot p9)) p8)
+				else
+					((land) ((lor) ((lor) p2 p3) (lnot p5)) p4) in
+			(* Check *)
+			if (c = 1 && (n >= 2 && n <= 3) && m_c = 0) then
+				marker.(i).(j) <- 1;
+		done;
+	done;
+	img_mvt m marker;
+	deleting := areThereNonZeros (absDiff m m_bak);
+	!deleting;;
+
+(* Actuall thinning part *)
+let thinning m methode =
+	let cur_m = Array.copy m in
+	(* Actual while - Add an iter check *)
+	let isDeleting = ref true in
+	while !isDeleting do
+		isDeleting := methode cur_m 0;
+		isDeleting := methode cur_m 1;
+	done;cur_m;;
+
+(* Make the set of points after sobel *)
+let getPoints m =
+	let (h,w) = getHW m in
+	let cur = ref 0 in
+	(* Find the size *)
+	for i = 0 to (h-1) do
+		for j = 0 to (w-1) do
+			if (m.(i).(j) = 1) then cur := !cur + 1;
+		done;
+	done;
+	(* Make the array *)
+	let ret = Array.make !cur [|0;0|] in
+	cur := 0;
+	for i = 0 to (h-1) do
+		for j = 0 to (w-1) do
+			if (m.(i).(j) = 1) then
+				(ret.(!cur)<-[|i;j|];
+				cur := !cur + 1);
+		done;
+	done;ret;;
+
+(* Display a binary matrix *)
+let displayBin m =
+	let f x =
+		if x = 0 then 255.
+		else 0. in
+	displayAnyMatrix (matrixApply f m);;
+
+(* Transform an image to a kd-tree *)
+let image_to_kdt img =
+	let gr_img = imageToGreyScale img in
+	let sobel_img = align_matrix (sobel_magn gr_img) in
+	let bin_img = binarize sobel_img 60. in (* 60 sounds ideal *)
+	let thin_img = thinning bin_img one_thining_guohall in
+ 	let pts_img = getPoints thin_img in
+	(pts_img,(KDTrees.constructKDT pts_img));;
