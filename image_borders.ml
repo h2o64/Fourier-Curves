@@ -422,10 +422,10 @@ module Image_Borders :
 				update_neighborhood ();
 				remove_from_points !current_point;
 				count := !count + 1 in
-			(* Initialisation *)
-			routine (S.choose !pointSet);
 			(* Cover all the points *)
 			while (!count < num) do
+				(* Re-initialise *)
+				routine (S.choose !pointSet);
 				(* Build the current segment *)
 				while ((Array.length !current_neighborhood) > 0) do
 					(* Add closest neightbor to the segment *)
@@ -435,8 +435,6 @@ module Image_Borders :
 				done;
 				(* Add the built segment to the bag *)
 				add_to_bag ();
-				(* Re-initialise *)
-				if not (S.is_empty !pointSet) then routine (S.choose !pointSet);
 			done;(Array.of_list !segment_bag);;
 
 	end
