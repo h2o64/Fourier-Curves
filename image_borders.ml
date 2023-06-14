@@ -4,7 +4,7 @@ open Image_magick;;
 #load "graphics.cma";;
 
 (* Set structure *)
-module S = Set.Make(struct type t = (int array) let compare = compare end);;
+module S = Set.Make(struct type t = (float array) let compare = compare end);;
 
 module Image_Borders :
   sig
@@ -34,7 +34,7 @@ module Image_Borders :
 		val normalisation : float array array -> float array array
 		val align_matrix : float array array -> float array array
 		val sobel_magn : float array array -> float array array
-		val binarize : 'a array array -> 'a -> int array array
+		val binarize : float array array -> float -> int array array
 		val img_mvt : int array array -> int array array -> unit
 		val areThereNonZeros_aux : int array array -> int -> bool -> bool
 		val areThereNonZeros : int array array -> bool
@@ -42,10 +42,10 @@ module Image_Borders :
 		val p : 'a array array -> int -> int -> int -> 'a
 		val one_thining_guohall : int array array -> int -> bool
 		val thinning : 'a array -> ('a array -> int -> bool) -> 'a array
-		val getPoints : int array array -> int array array
+		val getPoints : int array array -> float array array
 		val displayBin : int array array -> unit
-		val image_to_kdt : Graphics.color array array -> int array array * int KDTrees.tree
-		val pointsToLines : S.elt array * int KDTrees.tree -> int -> int array array array
+		val image_to_kdt : Graphics.color array array -> float -> float array array * float KDTrees.tree
+		val pointsToLines : S.elt array * float KDTrees.tree -> int -> S.elt array array
   end =
 
   struct
@@ -335,6 +335,46 @@ module Image_Borders :
 			deleting := areThereNonZeros (absDiff m m_bak);
 			!deleting;;
 
+	(* Zhangsuen Method *)
+	let one_thining_zhangsuen m iter =
+		(* Prepare matrix *)
+		let (h,w) = getHW m in
+		let marker = Array.make_matrix h w 0 in
+		let m_bak = Array.copy m in
+		let deleting = ref false in
+		let bool2bin value =
+			if value then 1
+			else 0 in
+		(* Actual loop *)
+		for i = 2 to (h-2) do
+			for j = 2 to (w-2) do
+				(* Get values *)
+				let p_cur num = p m i j num in
+				let p2 = (p_cur 2) in
+				let p3 = (p_cur 3) in
+				let p4 = (p_cur 4) in
+				let p5 = (p_cur 5) in
+				let p6 = (p_cur 6) in
+				let p7 = (p_cur 7) in
+				let p8 = (p_cur 8) in
+				let p9 = (p_cur 9) in
+				(* Conditions *)
+				let a = (bool2bin ((p2 = 0) && (p3 = 1))) + (bool2bin ((p3 = 0 && (p4 = 1)))) + 
+								 (bool2bin ((p4 = 0) && (p5 = 1))) + (bool2bin ((p5 = 0 && (p6 = 1)))) + 
+								 (bool2bin ((p6 = 0) && (p7 = 1))) + (bool2bin ((p7 = 0 && (p8 = 1)))) +
+								 (bool2bin ((p8 = 0) && (p9 = 1))) + (bool2bin ((p9 = 0 && (p2 = 1)))) in
+				let b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 in
+				let m1 = if (iter = 0) then (p2 * p4 * p6) else (p2 * p4 * p8) in
+				let m2 = if (iter = 0) then (p4 * p6 * p8) else (p2 * p6 * p8) in
+				(* Check *)
+				if ((a = 1) && ((b >= 2) && (b <= 6)) && (m1 = 0) && (m2 = 0)) then
+					marker.(i).(j) <- 1;
+			done;
+		done;
+		img_mvt m marker;
+		deleting := areThereNonZeros (absDiff m m_bak);
+		!deleting;;
+
 		(* Actuall thinning part *)
 		let thinning m methode =
 			let cur_m = Array.copy m in
@@ -356,12 +396,12 @@ module Image_Borders :
 				done;
 			done;
 			(* Make the array *)
-			let ret = Array.make !cur [|0;0|] in
+			let ret = Array.make !cur [|0.;0.|] in
 			cur := 0;
 			for i = 0 to (h-1) do
 				for j = 0 to (w-1) do
 					if (m.(i).(j) = 1) then
-						(ret.(!cur)<-[|i;j|];
+						(ret.(!cur)<-[|(float_of_int i);(float_of_int j)|];
 						cur := !cur + 1);
 				done;
 			done;ret;;
@@ -374,31 +414,55 @@ module Image_Borders :
 			displayAnyMatrix (matrixApply f m);;
 
 		(* Transform an image to a kd-tree *)
-		let image_to_kdt img =
+		let image_to_kdt img threshold =
 			let gr_img = imageToGreyScale img in
 			let sobel_img = align_matrix (sobel_magn gr_img) in
-			let bin_img = binarize sobel_img 60. in (* 60 sounds ideal *)
-			let thin_img = thinning bin_img one_thining_guohall in
-		 	let pts_img = getPoints thin_img in
+			let bin_img = binarize sobel_img threshold in
+			(* let thin_img = thinning bin_img one_thining_guohall in *)
+		 	let pts_img = getPoints bin_img in
+			displayBin bin_img;
 			(pts_img,(KDTrees.constructKDT pts_img));;
+
+		(* DEBUG *)
+		let print_arr arr =
+			let print_vect_d vect =
+				print_string "[|";
+				print_float vect.(0);
+				print_string ";";
+				print_float vect.(1);
+				print_string "|]" in
+			for i = 0 to (Array.length arr)-1 do
+				print_vect_d arr.(i);
+				print_string "\n";
+			done;;
 
 		(* Transform points to lines *)
 		let pointsToLines (pointList,pointTree) neighborhoodSize =
-			(* Transform an array to a set *)
-			let set_of_array arr = S.of_list (Array.to_list arr) in
 			(* Neiborhood of any tree point *)
-			let nf point = KDTrees.knns pointTree point neighborhoodSize KDTrees.int_tools 2 in
+			let nf point = KDTrees.knns pointTree point neighborhoodSize KDTrees.float_tools 2 in
 			(* Various initializers *)
 			let num = Array.length pointList in
-			let pointSet = ref (set_of_array pointList) in
+			let pointSet = ref (S.empty) in
 			let count = ref 0 in
 			(* Algorithm variables *)
 			let current_point = ref [||] in
 			let current_neighborhood = ref [||] in
 			let current_segment = ref [] in
 			let segment_bag = ref [] in
+			let couldReverse = ref true in
+			(* Vector operation *)
+			let sub_v a b = (Array.map2 ( -. ) a b) in
+			let add_v a b = (Array.map2 ( +. ) a b) in
+			let mul_v a x = [|a.(0)*.x;a.(1)*.x|] in
+			let dot_v a b = (a.(0)*.b.(0) +. a.(1)*.b.(1)) in
+			let norm_v a = sqrt (dot_v a a) in
 			(* Updaters to global variables *)
-			let add_to_segment point = (current_segment := point::!current_segment) in
+			let add_to_segment point =
+				((* Draw points live *)
+				Graphics.plot (int_of_float point.(1)) (470 - (int_of_float point.(0)));
+				(* print_string ("\ni = "^(string_of_float point.(0)));
+				print_string (" j = "^(string_of_float point.(1))); *)
+				current_segment := point::!current_segment) in
 			let add_to_bag () =
 				(segment_bag := (Array.of_list !current_segment)::!segment_bag;
 				current_segment := []) in
@@ -406,15 +470,26 @@ module Image_Borders :
 				let ret = ref [] in
 				(* Get the neighbors *)
 				let neigh = nf !current_point in
-				for i = 0 to (neighborhoodSize-1) do
+				let size = Array.length neigh in
+				for i = 0 to (size-1) do
 					let (_,cur) = neigh.(i) in
-					if (S.mem cur !pointSet) then ret := cur::!ret;
+					if not(S.mem cur !pointSet) then ret := cur::!ret;
 				done;(current_neighborhood :=
 							(Array.of_list (List.rev !ret))); in
 			let update_current_point point =
 				current_point := point in
 			let remove_from_points point =
-				pointSet := S.remove point !pointSet in
+				pointSet := S.add point !pointSet in
+			let nth_of_seg n = List.nth !current_segment n in
+			(* WARNING: THIS IS BAD AF *)
+			let choose_rnd_point () =
+				let array_rand ary =
+					let len = Array.length ary in
+					ary.(Random.int len) in
+				let ret = ref (array_rand pointList) in
+				while (S.mem !ret !pointSet) do
+					ret := (array_rand pointList);
+				done;!ret in
 			(* Main routine *)
 			let routine point =
 				update_current_point point;
@@ -422,19 +497,91 @@ module Image_Borders :
 				update_neighborhood ();
 				remove_from_points !current_point;
 				count := !count + 1 in
+
+
+
+			(* DEBUG *)
+			let debug case =
+				let interesst = [|[|39.; 13.|]; [|40.; 12.|]; [|40.; 14.|]; [|39.; 12.|]; [|39.; 14.|];
+  [|41.; 12.|]; [|40.; 11.|]; [|40.; 15.|]; [|39.; 15.|]; [|41.; 11.|];
+  [|40.; 16.|]; [|39.; 16.|]; [|39.; 17.|]; [|40.; 18.|]; [|41.; 18.|];
+  [|40.; 19.|]; [|41.; 19.|]; [|40.; 20.|]; [|40.; 22.|]; [|38.; 0.|];[|40.;13.|]|] in
+				if (Array.mem !current_point interesst) then
+					(print_string ("\nCase "^case);
+					print_string "\nCurrent point : ";
+					print_arr [|!current_point|];
+					print_string "Current neighborhood : ";
+					print_arr !current_neighborhood) in
+			
 			(* Cover all the points *)
 			while (!count < num) do
 				(* Re-initialise *)
-				routine (S.choose !pointSet);
+				couldReverse := true;
+				routine (choose_rnd_point ());
+				let seg_length = ref !count in
 				(* Build the current segment *)
-				while ((Array.length !current_neighborhood) > 0) do
-					(* Add closest neightbor to the segment *)
-					add_to_segment !current_neighborhood.(0);
-					(* Update the variables *)
-					routine !current_neighborhood.(0);
+				let (r,g,b) = ((Random.int 255),(Random.int 255),(Random.int 255)) in
+				Graphics.set_color (Graphics.rgb r g b);
+				while (((Array.length !current_neighborhood) > 0) || !couldReverse) do
+					(* Restart from the other end of the segment *)
+					if ((Array.length !current_neighborhood) = 0) then
+						(debug "Empty Neighborhood";
+						couldReverse := false;
+						current_segment := List.rev !current_segment;
+						update_current_point (List.hd !current_segment);
+						update_neighborhood ())
+					else
+						(* Sleep *)
+						((* Unix.sleepf 0.0001; *)
+						(* Update the variables *)
+						if true (* ((List.length !current_segment) < 4) ||
+								((Array.length !current_neighborhood) = 1) *) then
+							(debug "Classic Continuation";
+							routine !current_neighborhood.(0))
+						else
+							(* Penalize sharp edges *)
+							(let third = (nth_of_seg 3) in
+							let sec = (nth_of_seg 2) in
+							let first = (nth_of_seg 1) in
+							let d_v = add_v (sub_v first sec) (mul_v (sub_v sec third) 0.5) in
+							let d = mul_v d_v (1./.(norm_v d_v)) in
+							let n = [|(-1.)*.d.(1);d.(0)|] in
+							(* Find the best candidate *)
+							let compare_v a b =
+								(* Compute the distances *)
+								let dist x =
+									sqrt (((dot_v d (sub_v x first))**2.) +.
+											 ((dot_v n (sub_v x first))**2.)) in
+								let dist_a = dist a in
+								let dist_b = dist b in
+								if dist_a < dist_b then (-1)
+								else if dist_b > dist_a then 1
+								else 0 in
+							(* Sort the nearest accordingly *)
+							Array.fast_sort compare_v !current_neighborhood;
+							(* Do the shorten routine for the two points *)
+							add_to_segment !current_neighborhood.(0);
+							remove_from_points !current_neighborhood.(0);
+							count := !count + 1;
+							routine !current_neighborhood.(1);););						
 				done;
-				(* Add the built segment to the bag *)
-				add_to_bag ();
+				debug "End segment";
+				(* If the segment is shorter than 10 points *)
+				if (!count - !seg_length) > 10 then
+					(* Add the built segment to the bag *)
+					add_to_bag ();
 			done;(Array.of_list !segment_bag);;
 
 	end
+		let subanything ret_a k =
+			let goal_length = if (Array.length ret_a) > k then k else (Array.length ret_a) in
+			Array.sub ret_a 0 goal_length;;
+
+
+		let clear_arr arr =
+			let n = Array.length arr in
+			let ret = Array.make n [||] in
+			for i = 0 to (n-1) do
+				let (_,tmp) = arr.(i) in
+				ret.(i)<-tmp;
+			done;ret;;
